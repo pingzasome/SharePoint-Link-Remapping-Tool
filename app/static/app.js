@@ -4,6 +4,12 @@ const elements = {
   runBtn: document.getElementById("runBtn"),
   exportBtn: document.getElementById("exportBtn"),
   clearBtn: document.getElementById("clearBtn"),
+  toggleSecretBtn: document.getElementById("toggleSecretBtn"),
+  clientSecret: document.getElementById("clientSecret"),
+  fileInfo: document.getElementById("fileInfo"),
+  configCheck: document.getElementById("configCheck"),
+  fileCheck: document.getElementById("fileCheck"),
+  resultCheck: document.getElementById("resultCheck"),
   errorPanel: document.getElementById("errorPanel"),
   resultBody: document.getElementById("resultBody"),
   tableHint: document.getElementById("tableHint"),
@@ -13,13 +19,27 @@ const elements = {
   notFoundRows: document.getElementById("notFoundRows"),
   multipleRows: document.getElementById("multipleRows"),
   errorRows: document.getElementById("errorRows"),
+  progressPanel: document.getElementById("progressPanel"),
+  progressMessage: document.getElementById("progressMessage"),
+  startedAtText: document.getElementById("startedAtText"),
+  elapsedText: document.getElementById("elapsedText"),
+  progressRows: document.getElementById("progressRows"),
+  progressPercent: document.getElementById("progressPercent"),
+  progressBar: document.getElementById("progressBar"),
 };
 
 let hasPreview = false;
+let progressPollId = null;
+let elapsedTimerId = null;
+let currentJobStartedAt = null;
 
 elements.previewBtn.addEventListener("click", previewFile);
 elements.runBtn.addEventListener("click", runMatching);
 elements.clearBtn.addEventListener("click", clearResults);
+elements.toggleSecretBtn.addEventListener("click", toggleSecretVisibility);
+["tenantId", "clientId", "sharepointHost", "sharepointSitePath"].forEach((id) => {
+  document.getElementById(id).addEventListener("input", updateConfigCheck);
+});
 elements.exportBtn.addEventListener("click", (event) => {
   if (elements.exportBtn.getAttribute("aria-disabled") === "true") {
     event.preventDefault();
@@ -27,6 +47,9 @@ elements.exportBtn.addEventListener("click", (event) => {
 });
 
 disableExport();
+setRunReady(false);
+renderEmptyState("Upload and preview a ReplaceMagic export to begin.");
+updateConfigCheck();
 
 async function previewFile() {
   clearError();
@@ -43,6 +66,11 @@ async function previewFile() {
   try {
     const payload = await requestJson("/api/upload", { method: "POST", body: formData });
     hasPreview = true;
+    resetProgress();
+    setRunReady(true);
+    setFileInfo(`${payload.filename} - ${payload.totalRows} rows loaded`);
+    setChecklistState(elements.fileCheck, "ReplaceMagic file", `${payload.totalRows} rows ready`, "ready");
+    setChecklistState(elements.resultCheck, "Latest result", "Preview only", "idle");
     setSummary({ total: payload.totalRows, found: 0, notFound: 0, multipleMatch: 0, error: 0 });
     renderRows(
       payload.preview.map((row) => ({
@@ -79,6 +107,12 @@ async function runMatching() {
     sharepointSitePath: valueOf("sharepointSitePath"),
   };
 
+  const configError = validateConfig(config);
+  if (configError) {
+    showError(configError);
+    return;
+  }
+
   setBusy(true, "Searching SharePoint");
   try {
     const payload = await requestJson("/api/run", {
@@ -86,13 +120,9 @@ async function runMatching() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config),
     });
-    renderRows(payload.results);
-    setSummary(payload.summary);
-    elements.tableHint.textContent = "Matching complete. Export the CSV when ready.";
-    enableExport();
+    startProgress(payload);
   } catch (error) {
     showError(error.message);
-  } finally {
     setBusy(false);
   }
 }
@@ -104,9 +134,14 @@ async function clearResults() {
     await requestJson("/api/clear", { method: "POST" });
     hasPreview = false;
     elements.fileInput.value = "";
-    elements.resultBody.innerHTML = "";
+    setRunReady(false);
+    setFileInfo("");
+    renderEmptyState("Upload and preview a ReplaceMagic export to begin.");
     elements.tableHint.textContent = "Preview rows will appear here before matching.";
+    setChecklistState(elements.fileCheck, "ReplaceMagic file", "Not previewed", "idle");
+    setChecklistState(elements.resultCheck, "Latest result", "No result", "idle");
     setSummary({ total: 0, found: 0, notFound: 0, multipleMatch: 0, error: 0 });
+    resetProgress();
     disableExport();
   } catch (error) {
     showError(error.message);
@@ -125,8 +160,115 @@ async function requestJson(url, options) {
   return payload;
 }
 
+function startProgress(job) {
+  stopProgressTimers();
+  disableExport();
+  currentJobStartedAt = job.startedAt ? new Date(job.startedAt) : new Date();
+  elements.progressPanel.classList.remove("hidden");
+  elements.startedAtText.textContent = formatTime(currentJobStartedAt);
+  updateProgressUi({
+    status: job.status,
+    total: job.total || 0,
+    processed: 0,
+    percent: 0,
+    elapsedSeconds: 0,
+    message: "Starting SharePoint matching",
+    summary: { total: job.total || 0, found: 0, notFound: 0, multipleMatch: 0, error: 0 },
+  });
+
+  elapsedTimerId = window.setInterval(() => {
+    if (!currentJobStartedAt) {
+      return;
+    }
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - currentJobStartedAt.getTime()) / 1000));
+    elements.elapsedText.textContent = formatDuration(elapsedSeconds);
+  }, 1000);
+
+  progressPollId = window.setInterval(() => pollProgress(job.jobId), 1000);
+  pollProgress(job.jobId);
+}
+
+async function pollProgress(jobId) {
+  try {
+    const progress = await requestJson(`/api/progress/${jobId}`, { method: "GET" });
+    updateProgressUi(progress);
+
+    if (Array.isArray(progress.results) && progress.results.length > 0) {
+      renderRows(progress.results);
+    }
+    if (progress.summary) {
+      setSummary(progress.summary);
+    }
+
+    if (progress.status === "COMPLETED") {
+      stopProgressTimers();
+      updateProgressUi(progress);
+      renderRows(progress.results || []);
+      setSummary(progress.summary || {});
+      elements.tableHint.textContent = `Matching complete in ${formatDuration(progress.elapsedSeconds || 0)}. Export the CSV when ready.`;
+      setChecklistState(elements.resultCheck, "Latest result", `Completed in ${formatDuration(progress.elapsedSeconds || 0)}`, "ready");
+      setBusy(false);
+      enableExport();
+    } else if (progress.status === "ERROR") {
+      stopProgressTimers();
+      setBusy(false);
+      setChecklistState(elements.resultCheck, "Latest result", "Failed", "error");
+      showError(progress.error || "Matching failed.");
+      elements.tableHint.textContent = "Matching failed. Review the error and try again.";
+    }
+  } catch (error) {
+    stopProgressTimers();
+    setBusy(false);
+    showError(error.message);
+  }
+}
+
+function updateProgressUi(progress) {
+  const total = progress.total || 0;
+  const processed = progress.processed || 0;
+  const percent = Math.max(0, Math.min(100, progress.percent || 0));
+
+  elements.progressMessage.textContent = progress.message || "Running";
+  elements.progressRows.textContent = `${processed} / ${total}`;
+  elements.progressPercent.textContent = `${percent}%`;
+  elements.progressBar.style.width = `${percent}%`;
+  elements.elapsedText.textContent = formatDuration(progress.elapsedSeconds || 0);
+  if (progress.startedAt) {
+    currentJobStartedAt = new Date(progress.startedAt);
+    elements.startedAtText.textContent = formatTime(currentJobStartedAt);
+  }
+}
+
+function resetProgress() {
+  stopProgressTimers();
+  currentJobStartedAt = null;
+  elements.progressPanel.classList.add("hidden");
+  elements.progressMessage.textContent = "Waiting to start";
+  elements.startedAtText.textContent = "-";
+  elements.elapsedText.textContent = "00:00";
+  elements.progressRows.textContent = "0 / 0";
+  elements.progressPercent.textContent = "0%";
+  elements.progressBar.style.width = "0%";
+}
+
+function stopProgressTimers() {
+  if (progressPollId) {
+    window.clearInterval(progressPollId);
+    progressPollId = null;
+  }
+  if (elapsedTimerId) {
+    window.clearInterval(elapsedTimerId);
+    elapsedTimerId = null;
+  }
+}
+
 function renderRows(rows) {
   elements.resultBody.innerHTML = "";
+  if (!rows || rows.length === 0) {
+    renderEmptyState("No rows to display yet.");
+    return;
+  }
+
   const fragment = document.createDocumentFragment();
 
   rows.forEach((row) => {
@@ -154,6 +296,17 @@ function renderRows(rows) {
   });
 
   elements.resultBody.appendChild(fragment);
+}
+
+function renderEmptyState(message) {
+  elements.resultBody.innerHTML = "";
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.colSpan = 7;
+  td.className = "px-4 py-10 text-center text-sm text-slate-500";
+  td.textContent = message;
+  tr.appendChild(td);
+  elements.resultBody.appendChild(tr);
 }
 
 function cellClass(key) {
@@ -194,11 +347,73 @@ function setSummary(summary) {
 
 function setBusy(isBusy, label = "Searching SharePoint") {
   elements.previewBtn.disabled = isBusy;
-  elements.runBtn.disabled = isBusy;
+  elements.runBtn.disabled = isBusy || !hasPreview;
   elements.clearBtn.disabled = isBusy;
   elements.loadingState.classList.toggle("hidden", !isBusy);
   elements.loadingState.classList.toggle("flex", isBusy);
   elements.loadingState.lastChild.textContent = label;
+}
+
+function setRunReady(isReady) {
+  elements.runBtn.disabled = !isReady;
+}
+
+function setFileInfo(message) {
+  if (!message) {
+    elements.fileInfo.textContent = "";
+    elements.fileInfo.classList.add("hidden");
+    return;
+  }
+  elements.fileInfo.textContent = message;
+  elements.fileInfo.classList.remove("hidden");
+}
+
+function validateConfig(config) {
+  const missing = [];
+  if (!config.tenantId) missing.push("Tenant ID");
+  if (!config.clientId) missing.push("Client ID");
+  if (!config.sharepointHost) missing.push("SharePoint Host");
+  if (!config.sharepointSitePath) missing.push("SharePoint Site Path");
+  if (missing.length > 0) {
+    return `Missing required configuration: ${missing.join(", ")}`;
+  }
+  if (config.sharepointHost.startsWith("http")) {
+    return "SharePoint Host should be only the host name, for example contoso.sharepoint.com.";
+  }
+  if (!config.sharepointSitePath.startsWith("/sites/")) {
+    return "SharePoint Site Path should look like /sites/SiteName.";
+  }
+  return "";
+}
+
+function updateConfigCheck() {
+  const config = {
+    tenantId: valueOf("tenantId"),
+    clientId: valueOf("clientId"),
+    sharepointHost: valueOf("sharepointHost"),
+    sharepointSitePath: valueOf("sharepointSitePath"),
+  };
+  if (validateConfig(config)) {
+    setChecklistState(elements.configCheck, "SharePoint config", "Needs attention", "idle");
+  } else {
+    setChecklistState(elements.configCheck, "SharePoint config", "Looks ready", "ready");
+  }
+}
+
+function setChecklistState(element, label, value, state) {
+  const classes = {
+    ready: "flex items-center justify-between gap-3 rounded-md bg-emerald-50 px-3 py-2 text-emerald-900",
+    error: "flex items-center justify-between gap-3 rounded-md bg-red-50 px-3 py-2 text-red-900",
+    idle: "flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-slate-600",
+  };
+  element.className = classes[state] || classes.idle;
+  element.innerHTML = `<span>${label}</span><span class="font-semibold">${value}</span>`;
+}
+
+function toggleSecretVisibility() {
+  const isPassword = elements.clientSecret.type === "password";
+  elements.clientSecret.type = isPassword ? "text" : "password";
+  elements.toggleSecretBtn.textContent = isPassword ? "Hide" : "Show";
 }
 
 function showError(message) {
@@ -226,4 +441,26 @@ function disableExport() {
 
 function valueOf(id) {
   return document.getElementById(id).value.trim();
+}
+
+function formatDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+  if (hours > 0) {
+    return `${pad(hours)}:${pad(minutes)}:${pad(remainingSeconds)}`;
+  }
+  return `${pad(minutes)}:${pad(remainingSeconds)}`;
+}
+
+function formatTime(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function pad(value) {
+  return String(value).padStart(2, "0");
 }

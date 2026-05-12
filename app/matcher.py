@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Protocol
 
 
@@ -20,11 +21,19 @@ class SearchClient(Protocol):
         ...
 
 
-def run_exact_matching(rows: list[dict], graph_client: SearchClient) -> list[dict[str, str]]:
+ProgressCallback = Callable[[int, int, dict[str, str], list[dict[str, str]]], None]
+
+
+def run_exact_matching(
+    rows: list[dict],
+    graph_client: SearchClient,
+    progress_callback: ProgressCallback | None = None,
+) -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
     cache: dict[str, list[dict[str, str]]] = {}
+    total = len(rows)
 
-    for row in rows:
+    for index, row in enumerate(rows, start=1):
         old_path = row.get("OldPath", "")
         old_url = row.get("OldURL", "")
         search_file_name = row.get("SearchFileName", "")
@@ -50,6 +59,8 @@ def run_exact_matching(rows: list[dict], graph_client: SearchClient) -> list[dic
             result.update({"Status": "ERROR", "Remark": str(exc)})
 
         results.append(result)
+        if progress_callback:
+            progress_callback(index, total, result, results)
 
     return results
 

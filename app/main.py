@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -29,6 +32,8 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "app" / "static"), name="s
 templates = Jinja2Templates(directory=BASE_DIR / "app" / "templates")
 
 STATE: dict[str, object] = {"rows": [], "results": []}
+JOBS: dict[str, dict[str, object]] = {}
+JOBS_LOCK = threading.Lock()
 
 
 class ConfigPayload(BaseModel):
@@ -83,15 +88,39 @@ async def run_matching(config: ConfigPayload) -> dict:
         raise HTTPException(status_code=400, detail="Upload and preview a ReplaceMagic file before running matching.")
 
     graph_config = _build_graph_config(config)
-    try:
-        graph_client = GraphClient(graph_config)
-        results = run_exact_matching(rows, graph_client)
-        export_results_csv(results, LATEST_OUTPUT)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    graph_config.validate()
 
-    STATE["results"] = results
-    return {"results": results, "summary": summarize_results(results)}
+    job_id = uuid.uuid4().hex
+    started_at = datetime.now(UTC)
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "jobId": job_id,
+            "status": "RUNNING",
+            "startedAt": started_at.isoformat(),
+            "finishedAt": None,
+            "elapsedSeconds": 0,
+            "total": len(rows),
+            "processed": 0,
+            "percent": 0,
+            "message": "Starting SharePoint matching",
+            "results": [],
+            "summary": _progress_summary([], len(rows)),
+            "error": "",
+        }
+
+    thread = threading.Thread(target=_run_matching_job, args=(job_id, list(rows), graph_config), daemon=True)
+    thread.start()
+
+    return {"jobId": job_id, "status": "RUNNING", "startedAt": started_at.isoformat(), "total": len(rows)}
+
+
+@app.get("/api/progress/{job_id}")
+async def matching_progress(job_id: str) -> dict:
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Matching job was not found.")
+        return dict(job)
 
 
 @app.get("/api/export")
@@ -111,6 +140,8 @@ async def export_csv() -> FileResponse:
 async def clear_state() -> dict[str, bool]:
     STATE["rows"] = []
     STATE["results"] = []
+    with JOBS_LOCK:
+        JOBS.clear()
     if LATEST_OUTPUT.exists():
         LATEST_OUTPUT.unlink()
     return {"ok": True}
@@ -124,3 +155,74 @@ def _build_graph_config(payload: ConfigPayload) -> GraphConfig:
         sharepoint_host=payload.sharepointHost or os.getenv("SHAREPOINT_HOST", ""),
         sharepoint_site_path=payload.sharepointSitePath or os.getenv("SHAREPOINT_SITE_PATH", ""),
     )
+
+
+def _run_matching_job(job_id: str, rows: list[dict], graph_config: GraphConfig) -> None:
+    started = time.monotonic()
+
+    def update_progress(
+        processed: int,
+        total: int,
+        latest_result: dict[str, str],
+        current_results: list[dict[str, str]],
+    ) -> None:
+        percent = round((processed / total) * 100) if total else 100
+        message = f"Processed {processed} of {total}: {latest_result.get('SearchFileName', '')}"
+        summary = _progress_summary(current_results, total)
+        with JOBS_LOCK:
+            job = JOBS.get(job_id)
+            if not job:
+                return
+            job.update(
+                {
+                    "processed": processed,
+                    "percent": percent,
+                    "elapsedSeconds": round(time.monotonic() - started, 1),
+                    "message": message,
+                    "results": list(current_results),
+                    "summary": summary,
+                }
+            )
+
+    try:
+        graph_client = GraphClient(graph_config)
+        with JOBS_LOCK:
+            if job := JOBS.get(job_id):
+                job["message"] = "Connecting to Microsoft Graph"
+
+        results = run_exact_matching(rows, graph_client, progress_callback=update_progress)
+        export_results_csv(results, LATEST_OUTPUT)
+        STATE["results"] = results
+
+        with JOBS_LOCK:
+            if job := JOBS.get(job_id):
+                job.update(
+                    {
+                        "status": "COMPLETED",
+                        "finishedAt": datetime.now(UTC).isoformat(),
+                        "elapsedSeconds": round(time.monotonic() - started, 1),
+                        "processed": len(results),
+                        "percent": 100,
+                        "message": "Matching complete",
+                        "results": results,
+                        "summary": summarize_results(results),
+                    }
+                )
+    except Exception as exc:
+        with JOBS_LOCK:
+            if job := JOBS.get(job_id):
+                job.update(
+                    {
+                        "status": "ERROR",
+                        "finishedAt": datetime.now(UTC).isoformat(),
+                        "elapsedSeconds": round(time.monotonic() - started, 1),
+                        "message": "Matching failed",
+                        "error": str(exc),
+                    }
+                )
+
+
+def _progress_summary(results: list[dict[str, str]], total: int) -> dict[str, int]:
+    summary = summarize_results(results)
+    summary["total"] = total
+    return summary

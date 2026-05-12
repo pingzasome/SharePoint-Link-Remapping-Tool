@@ -32,7 +32,10 @@
               </label>
               <label class="block">
                 <span class="mb-1 block text-sm font-medium text-slate-700">Client Secret</span>
-                <input id="clientSecret" type="password" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-700/20" autocomplete="off" />
+                <div class="flex overflow-hidden rounded-md border border-slate-300 focus-within:border-cyan-700 focus-within:ring-2 focus-within:ring-cyan-700/20">
+                  <input id="clientSecret" type="password" class="min-w-0 flex-1 border-0 px-3 py-2 text-sm focus:outline-none" autocomplete="off" />
+                  <button id="toggleSecretBtn" type="button" class="border-l border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">Show</button>
+                </div>
               </label>
               <label class="block">
                 <span class="mb-1 block text-sm font-medium text-slate-700">SharePoint Host</span>
@@ -52,12 +55,31 @@
               <input id="fileInput" type="file" accept=".csv,.xlsx" class="w-full min-w-0 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm file:mb-2 file:mr-3 file:rounded-md file:border-0 file:bg-cyan-800 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-cyan-900 sm:file:mb-0" />
             </label>
             <p class="mt-2 text-xs text-slate-500">Supported file types: CSV, XLSX</p>
+            <div id="fileInfo" class="mt-3 hidden rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"></div>
 
             <div class="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
               <button id="previewBtn" class="rounded-md bg-cyan-800 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-900 disabled:cursor-not-allowed disabled:bg-slate-300">Preview File</button>
               <button id="runBtn" class="rounded-md bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300">Run Matching</button>
               <a id="exportBtn" href="/api/export" class="pointer-events-none rounded-md bg-slate-300 px-4 py-2 text-center text-sm font-semibold text-white">Export CSV</a>
               <button id="clearBtn" class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400">Clear Results</button>
+            </div>
+          </section>
+
+          <section class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <h2 class="mb-3 text-base font-semibold text-slate-950">Run Checklist</h2>
+            <div class="space-y-2 text-sm">
+              <div id="configCheck" class="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-slate-600">
+                <span>SharePoint config</span>
+                <span class="font-semibold">Check before run</span>
+              </div>
+              <div id="fileCheck" class="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-slate-600">
+                <span>ReplaceMagic file</span>
+                <span class="font-semibold">Not previewed</span>
+              </div>
+              <div id="resultCheck" class="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-slate-600">
+                <span>Latest result</span>
+                <span class="font-semibold">No result</span>
+              </div>
             </div>
           </section>
         </div>
@@ -83,6 +105,36 @@
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div class="text-xs font-medium uppercase text-slate-500">Error</div>
               <div id="errorRows" class="mt-2 text-2xl font-semibold text-red-700">0</div>
+            </div>
+          </section>
+
+          <section id="progressPanel" class="hidden rounded-lg border border-cyan-200 bg-white p-4 shadow-sm">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 class="text-base font-semibold text-slate-950">Matching Progress</h2>
+                <p id="progressMessage" class="mt-1 text-sm text-slate-600">Waiting to start</p>
+              </div>
+              <div class="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4 lg:min-w-[520px]">
+                <div>
+                  <div class="text-xs uppercase text-slate-500">Started</div>
+                  <div id="startedAtText" class="mt-1 font-semibold text-slate-900">-</div>
+                </div>
+                <div>
+                  <div class="text-xs uppercase text-slate-500">Elapsed</div>
+                  <div id="elapsedText" class="mt-1 font-semibold text-slate-900">00:00</div>
+                </div>
+                <div>
+                  <div class="text-xs uppercase text-slate-500">Rows</div>
+                  <div id="progressRows" class="mt-1 font-semibold text-slate-900">0 / 0</div>
+                </div>
+                <div>
+                  <div class="text-xs uppercase text-slate-500">Complete</div>
+                  <div id="progressPercent" class="mt-1 font-semibold text-cyan-800">0%</div>
+                </div>
+              </div>
+            </div>
+            <div class="mt-4 h-3 overflow-hidden rounded-full bg-slate-100">
+              <div id="progressBar" class="h-full w-0 rounded-full bg-cyan-700 transition-all duration-300"></div>
             </div>
           </section>
 
