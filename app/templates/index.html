@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ReplaceMagic SharePoint URL Matcher</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="min-h-screen overflow-x-hidden bg-slate-50 text-slate-900">
+    <main class="mx-auto w-full max-w-[1600px] px-3 py-4 sm:px-5 lg:px-6">
+      <header class="mb-5 flex flex-col gap-2 border-b border-slate-200 pb-4">
+        <h1 class="text-xl font-semibold tracking-normal text-slate-950 sm:text-2xl">ReplaceMagic SharePoint URL Matcher</h1>
+        <p class="max-w-3xl text-sm text-slate-600">
+          Upload a ReplaceMagic export, search SharePoint by exact filename, and export a CSV with old and new URLs.
+        </p>
+      </header>
+
+      <section id="errorPanel" class="mb-4 hidden border-l-4 border-red-600 bg-red-50 px-4 py-3 text-sm text-red-900"></section>
+
+      <section class="grid min-w-0 gap-5 xl:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[380px_minmax(0,1fr)]">
+        <div class="min-w-0 space-y-5">
+          <section class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <h2 class="mb-4 text-base font-semibold text-slate-950">SharePoint Connection</h2>
+            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-slate-700">Tenant ID</span>
+                <input id="tenantId" value="{{ defaults.tenantId }}" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-700/20" autocomplete="off" />
+              </label>
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-slate-700">Client ID</span>
+                <input id="clientId" value="{{ defaults.clientId }}" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-700/20" autocomplete="off" />
+              </label>
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-slate-700">Client Secret</span>
+                <input id="clientSecret" type="password" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-700/20" autocomplete="off" />
+              </label>
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-slate-700">SharePoint Host</span>
+                <input id="sharepointHost" value="{{ defaults.sharepointHost }}" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-700/20" autocomplete="off" />
+              </label>
+              <label class="block">
+                <span class="mb-1 block text-sm font-medium text-slate-700">SharePoint Site Path</span>
+                <input id="sharepointSitePath" value="{{ defaults.sharepointSitePath }}" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-700/20" autocomplete="off" />
+              </label>
+            </div>
+          </section>
+
+          <section class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <h2 class="mb-4 text-base font-semibold text-slate-950">Upload</h2>
+            <label class="block">
+              <span class="mb-1 block text-sm font-medium text-slate-700">ReplaceMagic export file</span>
+              <input id="fileInput" type="file" accept=".csv,.xlsx" class="w-full min-w-0 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm file:mb-2 file:mr-3 file:rounded-md file:border-0 file:bg-cyan-800 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-cyan-900 sm:file:mb-0" />
+            </label>
+            <p class="mt-2 text-xs text-slate-500">Supported file types: CSV, XLSX</p>
+
+            <div class="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              <button id="previewBtn" class="rounded-md bg-cyan-800 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-900 disabled:cursor-not-allowed disabled:bg-slate-300">Preview File</button>
+              <button id="runBtn" class="rounded-md bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300">Run Matching</button>
+              <a id="exportBtn" href="/api/export" class="pointer-events-none rounded-md bg-slate-300 px-4 py-2 text-center text-sm font-semibold text-white">Export CSV</a>
+              <button id="clearBtn" class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400">Clear Results</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="min-w-0 space-y-5">
+          <section class="grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-5">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div class="text-xs font-medium uppercase text-slate-500">Total rows</div>
+              <div id="totalRows" class="mt-2 text-2xl font-semibold text-slate-950">0</div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div class="text-xs font-medium uppercase text-slate-500">Found</div>
+              <div id="foundRows" class="mt-2 text-2xl font-semibold text-emerald-700">0</div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div class="text-xs font-medium uppercase text-slate-500">Not found</div>
+              <div id="notFoundRows" class="mt-2 text-2xl font-semibold text-amber-700">0</div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div class="text-xs font-medium uppercase text-slate-500">Multiple match</div>
+              <div id="multipleRows" class="mt-2 text-2xl font-semibold text-indigo-700">0</div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div class="text-xs font-medium uppercase text-slate-500">Error</div>
+              <div id="errorRows" class="mt-2 text-2xl font-semibold text-red-700">0</div>
+            </div>
+          </section>
+
+          <section class="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <div class="flex min-h-16 flex-col gap-3 border-b border-slate-200 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+              <div class="min-w-0">
+                <h2 class="text-base font-semibold text-slate-950">Results</h2>
+                <p id="tableHint" class="mt-1 text-xs text-slate-500">Preview rows will appear here before matching.</p>
+              </div>
+              <div id="loadingState" class="hidden shrink-0 items-center gap-2 text-sm text-cyan-800">
+                <span class="h-4 w-4 animate-spin rounded-full border-2 border-cyan-800 border-t-transparent"></span>
+                Searching SharePoint
+              </div>
+            </div>
+            <div class="max-w-full overflow-x-auto">
+              <table class="w-full min-w-[1120px] table-fixed divide-y divide-slate-200 text-sm">
+                <thead class="bg-slate-100 text-left text-xs uppercase text-slate-600">
+                  <tr>
+                    <th class="w-[16%] px-4 py-3 font-semibold">OldPath</th>
+                    <th class="w-[16%] px-4 py-3 font-semibold">OldURL</th>
+                    <th class="w-[14%] px-4 py-3 font-semibold">SearchFileName</th>
+                    <th class="w-[14%] px-4 py-3 font-semibold">MatchedFileName</th>
+                    <th class="w-[24%] px-4 py-3 font-semibold">NewURL</th>
+                    <th class="w-[8%] px-4 py-3 font-semibold">Status</th>
+                    <th class="w-[8%] px-4 py-3 font-semibold">Remark</th>
+                  </tr>
+                </thead>
+                <tbody id="resultBody" class="divide-y divide-slate-100 bg-white"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
